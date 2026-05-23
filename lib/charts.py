@@ -147,8 +147,8 @@ def price_chart(df: pd.DataFrame, ticker: str, chart_type: str = "Area") -> go.F
     )
 
     fig.update_layout(**_base_layout(ticker, height=430))
-    fig.update_xaxis(rangeslider_visible=False, showgrid=False)
-    fig.update_yaxis(showgrid=True, gridcolor="rgba(255,255,255,0.05)")
+    fig.update_xaxes(rangeslider_visible=False, showgrid=False)
+    fig.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.05)")
     return fig
 
 
@@ -186,7 +186,7 @@ def sector_bar(df_sector: pd.DataFrame, period: str = "1M") -> go.Figure:
         textposition="outside",
     ))
     fig.update_layout(**_base_layout(f"NSE Sector Returns — {period}", height=380))
-    fig.update_xaxis(zeroline=True, zerolinecolor="#555", ticksuffix="%")
+    fig.update_xaxes(zeroline=True, zerolinecolor="#555", ticksuffix="%")
     return fig
 
 
@@ -251,7 +251,7 @@ def margin_chart(financials: dict) -> go.Figure:
             ))
 
         fig.update_layout(**_base_layout("Margin Trends (%)", height=320))
-        fig.update_yaxis(ticksuffix="%")
+        fig.update_yaxes(ticksuffix="%")
         return fig
     except Exception:
         return _empty_fig("Could not render margin chart")
@@ -281,7 +281,7 @@ def portfolio_bar(df: pd.DataFrame) -> go.Figure:
         textposition="outside",
     ))
     fig.update_layout(**_base_layout("Unrealized P&L (%)", height=340))
-    fig.update_yaxis(ticksuffix="%", zeroline=True, zerolinecolor="#555")
+    fig.update_yaxes(ticksuffix="%", zeroline=True, zerolinecolor="#555")
     return fig
 
 
@@ -352,7 +352,7 @@ def rsi_chart(df: pd.DataFrame) -> go.Figure:
     fig.add_hline(y=30, line_dash="dash", line_color="#00C853", line_width=1)
     fig.add_hline(y=50, line_dash="dot",  line_color="#555",    line_width=1)
     fig.update_layout(**_base_layout("RSI (14)", height=200))
-    fig.update_yaxis(range=[0, 100])
+    fig.update_yaxes(range=[0, 100])
     return fig
 
 
@@ -389,7 +389,7 @@ def macro_line(dates: list, values: list, title: str,
     ))
     fig.update_layout(**_base_layout(title, height=300))
     if unit:
-        fig.update_yaxis(ticksuffix=unit)
+        fig.update_yaxes(ticksuffix=unit)
     return fig
 
 
