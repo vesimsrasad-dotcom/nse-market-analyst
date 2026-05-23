@@ -209,7 +209,7 @@ with tab_snap:
             <div style="margin:4px 0;">
               <div style="display:flex;justify-content:space-between;font-size:12px;color:#888;">
                 <span>{comp_name}</span>
-                <span style="color:#FAFAFA;">{lbl}{' · ' + val if val else ''}</span>
+                <span style="color:#FAFAFA;">{lbl}{(' · ' + str(val)) if val else ''}</span>
               </div>
               <div style="background:#222;border-radius:4px;height:6px;margin-top:3px;">
                 <div style="background:{bar_color};width:{bar_pct}%;height:6px;border-radius:4px;"></div>
@@ -232,7 +232,7 @@ with tab_snap:
             <div style="margin:4px 0;">
               <div style="display:flex;justify-content:space-between;font-size:12px;color:#888;">
                 <span>{comp_name}</span>
-                <span style="color:#FAFAFA;">{lbl}{' · ' + val if val else ''}</span>
+                <span style="color:#FAFAFA;">{lbl}{(' · ' + str(val)) if val else ''}</span>
               </div>
               <div style="background:#222;border-radius:4px;height:6px;margin-top:3px;">
                 <div style="background:{bar_color};width:{bar_pct}%;height:6px;border-radius:4px;"></div>
