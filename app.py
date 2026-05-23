@@ -163,8 +163,7 @@ if not df_sec.empty:
     fig_sec = sector_bar(df_sec, sec_period)
     st.plotly_chart(fig_sec, use_container_width=True, config={"displayModeBar": False})
     st.dataframe(
-        df_sec.style.format({"Return (%)": "{:+.2f}%"})
-              .background_gradient(subset=["Return (%)"], cmap="RdYlGn", vmin=-10, vmax=10),
+        df_sec.style.format({"Return (%)": "{:+.2f}%"}),
         use_container_width=True, hide_index=True,
     )
 else:
