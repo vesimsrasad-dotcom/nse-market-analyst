@@ -4,6 +4,7 @@ Stock Analyzer — deep-dive on any NSE / BSE stock.
 """
 
 import streamlit as st
+from lib.auth import check_password, logout_button
 from streamlit_autorefresh import st_autorefresh
 from lib.refresh import market_status, timestamp_ist
 import pandas as pd
@@ -24,6 +25,7 @@ from lib.charts import (
 from lib.signals import technical_score, fundamental_score
 from lib.claude_analyst import analyse_stock
 
+if not check_password(): st.stop()
 _ms_status = market_status()
 _count_sa = st_autorefresh(interval=_ms_status["interval_ms"], key="sa_autorefresh")
 st.set_page_config(page_title="Stock Analyzer | NSE Market Analyst",
