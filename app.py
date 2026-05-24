@@ -5,6 +5,7 @@ Auto-refreshes every 30s during market hours, 5 min after hours.
 """
 
 import streamlit as st
+from lib.auth import check_password, logout_button
 from streamlit_autorefresh import st_autorefresh
 from lib.config import (
     APP_TITLE, APP_ICON, DISCLAIMER,
@@ -23,6 +24,7 @@ st.set_page_config(
 )
 
 # ── Auto-Refresh ──────────────────────────────────────────────────────────────
+if not check_password(): st.stop()
 status  = market_status()
 _count  = st_autorefresh(interval=status["interval_ms"], key="home_refresh")
 
