@@ -40,8 +40,8 @@ INDICES = {
     "Nifty FMCG":    {"ticker": "^CNXFMCG",  "emoji": "🛒"},
     "Nifty Realty":  {"ticker": "^CNXREALTY", "emoji": "🏢"},
     "Nifty Energy":  {"ticker": "^CNXENERGY", "emoji": "⚡"},
-    "Nifty Next 50":    {"ticker": "^NSMIDCP",      "emoji": "📊"},
-    "Nifty Smallcap":  {"ticker": "^CNXSMALLCAP",     "emoji": "🔹"},
+    "Nifty Midcap 100": {"ticker": "NIFTY_MIDCAP_100.NS", "emoji": "📊"},
+    "Nifty Smlcap 250":{"ticker": "NIFTYSMLCAP250.NS","emoji": "🔹"},
     "Bitcoin":       {"ticker": "BTC-USD",      "emoji": "₿"},
     "India VIX":     {"ticker": "^INDIAVIX",  "emoji": "📉"},
     "USD/INR":       {"ticker": "INR=X",      "emoji": "💱"},
@@ -54,7 +54,7 @@ MARKET_PULSE_CARDS = [
     "Nifty 50", "Bank Nifty", "Sensex", "Nifty IT",
     "Nifty Pharma", "Nifty Auto", "Nifty Metal", "Nifty FMCG",
     "India VIX", "USD/INR", "Gold", "Crude Oil",
-    "Nifty Next 50", "Nifty Smallcap", "Bitcoin",
+    "Nifty Midcap 100", "Nifty Smlcap 250", "Bitcoin",
 ]
 
 # Sector indices for sector performance chart
