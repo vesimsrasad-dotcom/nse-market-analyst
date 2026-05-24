@@ -40,6 +40,9 @@ INDICES = {
     "Nifty FMCG":    {"ticker": "^CNXFMCG",  "emoji": "🛒"},
     "Nifty Realty":  {"ticker": "^CNXREALTY", "emoji": "🏢"},
     "Nifty Energy":  {"ticker": "^CNXENERGY", "emoji": "⚡"},
+    "Nifty Midcap":  {"ticker": "^CNXMIDCAP",  "emoji": "📊"},
+    "Nifty Smallcap":{"ticker": "^CNXSMALLCAP", "emoji": "🔹"},
+    "Bitcoin":       {"ticker": "BTC-USD",      "emoji": "₿"},
     "India VIX":     {"ticker": "^INDIAVIX",  "emoji": "📉"},
     "USD/INR":       {"ticker": "INR=X",      "emoji": "💱"},
     "Gold":          {"ticker": "GC=F",       "emoji": "🥇"},
@@ -51,6 +54,7 @@ MARKET_PULSE_CARDS = [
     "Nifty 50", "Bank Nifty", "Sensex", "Nifty IT",
     "Nifty Pharma", "Nifty Auto", "Nifty Metal", "Nifty FMCG",
     "India VIX", "USD/INR", "Gold", "Crude Oil",
+    "Nifty Midcap", "Nifty Smallcap", "Bitcoin",
 ]
 
 # Sector indices for sector performance chart
@@ -136,3 +140,8 @@ COLOR_CARD   = "#1A1F2E"
 # ── Claude Model ─────────────────────────────────────────────────────────────
 CLAUDE_MODEL = "claude-sonnet-4-20250514"
 CLAUDE_MAX_TOKENS = 1800
+
+# ── Private Access ────────────────────────────────────────────────────────────
+# Set DASHBOARD_PASSWORD in your .env or Streamlit Secrets to enable password protection
+# Leave empty string "" to disable password protection
+DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "")
