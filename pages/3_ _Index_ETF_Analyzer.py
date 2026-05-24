@@ -4,6 +4,7 @@ Indian Index / ETF Analyzer.
 """
 
 import streamlit as st
+from lib.auth import check_password, logout_button
 from streamlit_autorefresh import st_autorefresh
 from lib.refresh import market_status, timestamp_ist
 from lib.config import DISCLAIMER, CHART_PERIODS, INDIA_ETFS, INDICES, ANTHROPIC_API_KEY
@@ -11,6 +12,7 @@ from lib.market_data import get_fundamentals, get_history, get_quote, format_mar
 from lib.charts import price_chart, add_ma_overlays
 from lib.claude_analyst import analyse_etf
 
+if not check_password(): st.stop()
 _ms_status = market_status()
 _count_etf = st_autorefresh(interval=_ms_status["interval_ms"], key="etf_autorefresh")
 st.set_page_config(page_title="Index / ETF Analyzer | NSE Market Analyst",
