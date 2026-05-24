@@ -4,6 +4,7 @@ Market Pulse — full index / commodity dashboard.
 """
 
 import streamlit as st
+from lib.auth import check_password, logout_button
 from streamlit_autorefresh import st_autorefresh
 from lib.refresh import market_status, timestamp_ist
 from lib.config import (
