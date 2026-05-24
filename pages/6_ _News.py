@@ -4,6 +4,7 @@ News & Corporate Actions page.
 """
 
 import streamlit as st
+from lib.auth import check_password, logout_button
 from streamlit_autorefresh import st_autorefresh
 from lib.refresh import market_status, timestamp_ist
 from lib.config import DISCLAIMER, ANTHROPIC_API_KEY, normalise_symbol, POPULAR_STOCKS
@@ -11,6 +12,7 @@ from lib.market_data import get_stock_news
 from lib.news import get_market_news, news_card_html, NEWS_CATEGORIES, categorise_headline
 from lib.claude_analyst import analyse_news, explain_corporate_action
 
+if not check_password(): st.stop()
 _ms_status = market_status()
 _count_news = st_autorefresh(interval=_ms_status["interval_ms"], key="news_autorefresh")
 st.set_page_config(page_title="News | NSE Market Analyst",
