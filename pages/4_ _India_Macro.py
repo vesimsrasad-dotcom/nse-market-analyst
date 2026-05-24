@@ -4,6 +4,7 @@ India Macro Dashboard.
 """
 
 import streamlit as st
+from lib.auth import check_password, logout_button
 from streamlit_autorefresh import st_autorefresh
 from lib.refresh import market_status, timestamp_ist
 import pandas as pd
@@ -13,6 +14,7 @@ from lib.macro_india import get_india_macro_dict, macro_summary_text
 from lib.charts import macro_line
 from lib.claude_analyst import macro_pulse
 
+if not check_password(): st.stop()
 _ms_status = market_status()
 _count_macro = st_autorefresh(interval=_ms_status["interval_ms"], key="macro_autorefresh")
 st.set_page_config(page_title="India Macro | NSE Market Analyst",
