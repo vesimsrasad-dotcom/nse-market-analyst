@@ -84,10 +84,14 @@ with c2:
     st.markdown("<br>", unsafe_allow_html=True)
     popular = st.selectbox("Popular stocks", ["— pick one —"] + POPULAR_STOCKS,
                            key="popular_select", label_visibility="collapsed")
-    if popular != "— pick one —":
-        raw_input = popular
 
-ticker = normalise_symbol(raw_input)
+# Only use dropdown if user explicitly selected from it
+if popular != "— pick one —" and popular != st.session_state.get("last_manual_input", ""):
+    ticker = normalise_symbol(popular)
+    st.session_state["last_manual_input"] = popular
+else:
+    ticker = normalise_symbol(raw_input)
+    st.session_state["last_manual_input"] = raw_input
 
 # ── Load Data ─────────────────────────────────────────────────────────────────
 with st.spinner(f"Loading data for {ticker}…"):
@@ -95,8 +99,13 @@ with st.spinner(f"Loading data for {ticker}…"):
     financials = get_financials(ticker)
     quote      = get_quote(ticker)
 
-if "error" in info and not info.get("longName"):
+# Check if we have any meaningful data at all
+has_price = quote.get("price") is not None
+has_info  = info.get("longName") or info.get("shortName") or info.get("regularMarketPrice")
+
+if not has_price and not has_info:
     st.error(f"Could not load data for **{ticker}**. Check the symbol and try again.")
+    st.info("💡 Make sure you are using the correct NSE symbol, e.g. RELIANCE, TCS, NYKAA, ZOMATO")
     st.stop()
 
 name     = info.get("longName") or info.get("shortName") or ticker
