@@ -105,6 +105,14 @@ def get_history(ticker: str, period_key: str = "1M") -> pd.DataFrame:
             return pd.DataFrame()
         df.index = pd.to_datetime(df.index)
         df.index = df.index.tz_localize(None) if df.index.tzinfo else df.index
+        # Remove duplicate/bad timestamps (microsecond-level artifacts)
+        df = df[~df.index.duplicated(keep="last")]
+        # Remove rows where timestamp looks like microseconds (bad data)
+        if len(df) > 1:
+            time_diffs = df.index.to_series().diff().dropna()
+            if time_diffs.median().total_seconds() < 1:
+                # Bad data - timestamps are sub-second, skip
+                return pd.DataFrame()
         return df[["Open", "High", "Low", "Close", "Volume"]].copy()
     except Exception:
         return pd.DataFrame()
