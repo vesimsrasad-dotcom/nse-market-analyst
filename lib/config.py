@@ -81,11 +81,23 @@ SYMBOL_OVERRIDES = {
 def normalise_symbol(raw: str) -> str:
     """
     Convert user-entered symbol to yfinance-compatible ticker.
-    RELIANCE -> RELIANCE.NS
-    RELIANCE.NS -> RELIANCE.NS  (passthrough)
-    RELIANCE.BO -> RELIANCE.BO  (passthrough)
+    RELIANCE        -> RELIANCE.NS
+    NSE:RELIANCE    -> RELIANCE.NS
+    BSE:500325      -> 500325.BO
+    RELIANCE.NS     -> RELIANCE.NS  (passthrough)
+    RELIANCE.BO     -> RELIANCE.BO  (passthrough)
     """
-    raw = raw.strip().upper()
+    import re
+    raw = str(raw).strip().upper()
+
+    # Strip exchange prefixes: NSE: BSE: NSE/ BSE/ NSE\ BSE\
+    raw = re.sub(r"^(NSE:|BSE:|NSE/|BSE/|NSE\\|BSE\\)", "", raw).strip()
+
+    # Handle BSE prefix → use .BO
+    if raw.startswith("BSE:"):
+        raw = raw[4:] + ".BO"
+        return raw
+
     if raw in SYMBOL_OVERRIDES:
         return SYMBOL_OVERRIDES[raw]
     if raw.startswith("^") or "=X" in raw or "=F" in raw:
