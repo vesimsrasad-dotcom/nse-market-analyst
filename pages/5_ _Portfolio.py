@@ -141,7 +141,15 @@ with tab_live:
                 else:
                     df_upload["qty"]      = pd.to_numeric(df_upload["qty"],      errors="coerce").fillna(0)
                     df_upload["avg_cost"] = pd.to_numeric(df_upload["avg_cost"], errors="coerce").fillna(0)
-                    df_upload["ticker"]   = df_upload["ticker"].astype(str).str.strip().str.upper()
+                    # Clean ticker — strip exchange prefixes like NSE: BSE: NSE/ etc.
+                    df_upload["ticker"] = (
+                        df_upload["ticker"]
+                        .astype(str)
+                        .str.strip()
+                        .str.upper()
+                        .str.replace(r"^(NSE:|BSE:|NSE/|BSE/|NSE\\|BSE\\)", "", regex=True)
+                        .str.strip()
+                    )
                     df_upload["sector"]   = df_upload.get("sector",   pd.Series([""] * len(df_upload))).fillna("")
                     df_upload["notes"]    = df_upload.get("notes",    pd.Series([""] * len(df_upload))).fillna("")
 
