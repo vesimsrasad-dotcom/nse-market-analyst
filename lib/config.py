@@ -156,4 +156,12 @@ CLAUDE_MAX_TOKENS = 1800
 # ── Private Access ────────────────────────────────────────────────────────────
 # Set DASHBOARD_PASSWORD in your .env or Streamlit Secrets to enable password protection
 # Leave empty string "" to disable password protection
-DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "")
+def _get_password() -> str:
+    """Read password from Streamlit Secrets first, then .env fallback."""
+    try:
+        import streamlit as st
+        return st.secrets.get("DASHBOARD_PASSWORD", "")
+    except Exception:
+        return os.getenv("DASHBOARD_PASSWORD", "")
+
+DASHBOARD_PASSWORD = _get_password()
