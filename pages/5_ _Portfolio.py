@@ -86,22 +86,22 @@ with tab_live:
         Optional columns: **Sector**, **Notes**
         """)
 
-        # Template download
+        # Template download as CSV (no extra dependencies needed)
         import io
         template_df = pd.DataFrame([
-            {"NSE Symbol": "RELIANCE", "Quantity": 10, "Avg Cost (₹)": 2500.00, "Sector": "Energy",   "Notes": ""},
-            {"NSE Symbol": "TCS",      "Quantity": 5,  "Avg Cost (₹)": 3800.00, "Sector": "IT",       "Notes": ""},
-            {"NSE Symbol": "HDFCBANK", "Quantity": 20, "Avg Cost (₹)": 1600.00, "Sector": "Banking",  "Notes": ""},
+            {"NSE Symbol": "RELIANCE", "Quantity": 10, "Avg Cost (₹)": 2500.00, "Sector": "Energy",  "Notes": ""},
+            {"NSE Symbol": "TCS",      "Quantity": 5,  "Avg Cost (₹)": 3800.00, "Sector": "IT",      "Notes": ""},
+            {"NSE Symbol": "HDFCBANK", "Quantity": 20, "Avg Cost (₹)": 1600.00, "Sector": "Banking", "Notes": ""},
         ])
-        buf = io.BytesIO()
-        template_df.to_excel(buf, index=False)
+        csv_template = template_df.to_csv(index=False).encode("utf-8")
         st.download_button(
-            "⬇️ Download Excel Template",
-            data=buf.getvalue(),
-            file_name="portfolio_template.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "⬇️ Download CSV Template",
+            data=csv_template,
+            file_name="portfolio_template.csv",
+            mime="text/csv",
             key="port_template_dl"
         )
+        st.caption("💡 You can also open this CSV in Excel, fill in your data, save as .xlsx or .csv and upload.")
 
         port_file = st.file_uploader(
             "Upload your portfolio file",
