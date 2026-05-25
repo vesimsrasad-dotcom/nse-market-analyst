@@ -207,15 +207,35 @@ with tab_live:
         df = enrich_portfolio(holdings)
 
     # Remove holding
-    remove_col, _ = st.columns([2, 3])
+    remove_col, clear_col, _ = st.columns([2, 1.5, 1.5])
     with remove_col:
         remove_ticker = st.selectbox("Remove holding",
             ["— select —"] + [h["ticker"] for h in holdings], key="port_remove")
         if remove_ticker != "— select —":
-            if st.button("🗑️ Remove", key="port_remove_btn"):
+            if st.button("🗑️ Remove selected", key="port_remove_btn"):
                 holdings = remove_holding(holdings, remove_ticker)
                 st.session_state.holdings = holdings
                 save_portfolio(holdings)
+                st.rerun()
+    with clear_col:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🗑️ Clear ALL holdings", key="port_clear_all", type="secondary"):
+            st.session_state["confirm_clear"] = True
+
+    # Confirmation dialog
+    if st.session_state.get("confirm_clear"):
+        st.warning("⚠️ This will remove all 47 holdings permanently. Are you sure?")
+        c1, c2, _ = st.columns([1, 1, 3])
+        with c1:
+            if st.button("✅ Yes, clear all", type="primary", key="port_confirm_clear"):
+                st.session_state.holdings = []
+                save_portfolio([])
+                st.session_state["confirm_clear"] = False
+                st.success("All holdings cleared.")
+                st.rerun()
+        with c2:
+            if st.button("❌ Cancel", key="port_cancel_clear"):
+                st.session_state["confirm_clear"] = False
                 st.rerun()
 
     # Summary metrics
