@@ -72,7 +72,107 @@ with tab_live:
         st.session_state.holdings = load_portfolio()
     holdings = st.session_state.holdings
 
-    with st.expander("➕ Add / Update Holding", expanded=len(holdings) == 0):
+    # ── Upload Excel / CSV ────────────────────────────────────────────────────
+    with st.expander("📂 Upload Excel / CSV to load portfolio", expanded=len(holdings) == 0):
+        st.markdown("""
+        Upload an Excel or CSV file with your holdings. Required columns:
+
+        | Column | Example |
+        |---|---|
+        | **NSE Symbol** | RELIANCE |
+        | **Quantity** | 50 |
+        | **Avg Cost (₹)** | 1350.00 |
+
+        Optional columns: **Sector**, **Notes**
+        """)
+
+        # Template download
+        import io
+        template_df = pd.DataFrame([
+            {"NSE Symbol": "RELIANCE", "Quantity": 10, "Avg Cost (₹)": 2500.00, "Sector": "Energy",   "Notes": ""},
+            {"NSE Symbol": "TCS",      "Quantity": 5,  "Avg Cost (₹)": 3800.00, "Sector": "IT",       "Notes": ""},
+            {"NSE Symbol": "HDFCBANK", "Quantity": 20, "Avg Cost (₹)": 1600.00, "Sector": "Banking",  "Notes": ""},
+        ])
+        buf = io.BytesIO()
+        template_df.to_excel(buf, index=False)
+        st.download_button(
+            "⬇️ Download Excel Template",
+            data=buf.getvalue(),
+            file_name="portfolio_template.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="port_template_dl"
+        )
+
+        port_file = st.file_uploader(
+            "Upload your portfolio file",
+            type=["csv", "xlsx", "xls"],
+            key="port_upload"
+        )
+
+        if port_file:
+            try:
+                fname = port_file.name.lower()
+                if fname.endswith(".csv"):
+                    df_upload = pd.read_csv(port_file)
+                else:
+                    df_upload = pd.read_excel(port_file)
+
+                # Normalise column names — flexible matching
+                df_upload.columns = [c.strip() for c in df_upload.columns]
+                col_map = {}
+                for col in df_upload.columns:
+                    cl = col.lower().replace(" ", "").replace("(₹)","").replace("(rs)","")
+                    if cl in ["nsesymbol","symbol","ticker","stock","scrip"]:
+                        col_map[col] = "ticker"
+                    elif cl in ["quantity","qty","shares","units"]:
+                        col_map[col] = "qty"
+                    elif cl in ["avgcost","averagecost","avgprice","buyprice","cost","price","purchaseprice"]:
+                        col_map[col] = "avg_cost"
+                    elif cl in ["sector","industry"]:
+                        col_map[col] = "sector"
+                    elif cl in ["notes","note","remarks","comment"]:
+                        col_map[col] = "notes"
+
+                df_upload = df_upload.rename(columns=col_map)
+
+                missing = [c for c in ["ticker","qty","avg_cost"] if c not in df_upload.columns]
+                if missing:
+                    st.error(f"Could not find columns: {missing}. Please check your file matches the template.")
+                else:
+                    df_upload["qty"]      = pd.to_numeric(df_upload["qty"],      errors="coerce").fillna(0)
+                    df_upload["avg_cost"] = pd.to_numeric(df_upload["avg_cost"], errors="coerce").fillna(0)
+                    df_upload["ticker"]   = df_upload["ticker"].astype(str).str.strip().str.upper()
+                    df_upload["sector"]   = df_upload.get("sector",   pd.Series([""] * len(df_upload))).fillna("")
+                    df_upload["notes"]    = df_upload.get("notes",    pd.Series([""] * len(df_upload))).fillna("")
+
+                    valid = df_upload[(df_upload["qty"] > 0) & (df_upload["avg_cost"] > 0)]
+                    if valid.empty:
+                        st.error("No valid rows found. Check quantity and cost columns have numbers.")
+                    else:
+                        st.success(f"✅ Found {len(valid)} holdings ready to import")
+                        st.dataframe(valid[["ticker","qty","avg_cost","sector","notes"]], 
+                                     use_container_width=True, hide_index=True)
+
+                        if st.button("📥 Import to Portfolio", type="primary", key="port_import_btn"):
+                            new_holdings = list(holdings)
+                            for _, row in valid.iterrows():
+                                norm = normalise_symbol(str(row["ticker"]))
+                                new_holdings = add_holding(
+                                    new_holdings, norm,
+                                    float(row["qty"]), float(row["avg_cost"]),
+                                    str(row.get("sector","")),
+                                    str(row.get("notes",""))
+                                )
+                            st.session_state.holdings = new_holdings
+                            save_portfolio(new_holdings)
+                            st.success(f"✅ Imported {len(valid)} holdings successfully!")
+                            st.rerun()
+            except Exception as e:
+                st.error(f"Could not read file: {e}")
+                st.info("Make sure your file is a valid Excel (.xlsx) or CSV file.")
+
+    # ── Manual Add ────────────────────────────────────────────────────────────
+    with st.expander("➕ Add single holding manually"):
         c1, c2, c3, c4, c5 = st.columns([2, 1.5, 1.5, 2, 2])
         with c1: new_ticker = st.text_input("NSE Symbol", placeholder="RELIANCE", key="port_ticker")
         with c2: new_qty    = st.number_input("Quantity", min_value=0.01, value=1.0, step=1.0, key="port_qty")
