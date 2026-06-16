@@ -198,9 +198,16 @@ current_prices = {tk: v["price"] for tk, v in quotes.items() if v["price"]}
 
 # ── Prep df for xirr.py (needs date objects, not datetime) ───────────────────
 df_for_xirr = df_tx.copy()
-df_for_xirr["Date"] = df_for_xirr["Date"].dt.date
+# Drop rows with unparseable dates before passing to xirr
+df_for_xirr = df_for_xirr[df_for_xirr["Date"].notna()].copy()
+df_for_xirr["Date"] = pd.to_datetime(df_for_xirr["Date"]).dt.date
 
 # ── Build live portfolio from Current Holdings column ─────────────────────────
+# Show what columns were detected — helps diagnose missing Current Holdings
+if "Current Holdings" not in df_tx.columns:
+    st.warning("⚠️ 'Current Holdings' column not found in your file. "
+               "Check the column name matches exactly (e.g. 'Current Holdings').")
+
 active = (
     df_tx[df_tx["Current Holdings"].notna() & (df_tx["Current Holdings"] > 0)]
     .sort_values("Date")
