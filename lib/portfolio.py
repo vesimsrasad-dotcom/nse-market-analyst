@@ -19,7 +19,6 @@ from lib.claude_analyst import analyse_portfolio
 from lib.refresh import market_status, timestamp_ist
 from lib.auth import check_password, logout_button
 from lib.xirr import xirr_summary, build_cashflows, xirr
-from lib.symbol_resolver import resolve_ticker_column
 
 st.set_page_config(page_title="Portfolio | NSE Market Analyst",
                    page_icon="💼", layout="wide")
