@@ -1,12 +1,12 @@
 """
 pages/5_ _Portfolio.py
 Single-file upload → Live Portfolio (left) + XIRR (right).
-No second upload — df_tx feeds both panels directly.
 
-File columns:
-  Date | Ticker | Type | Quantity | Price | Avg Cost (₹) | Current Holdings | Notes (optional)
+Accepts either NSE ticker symbols OR company names in the Ticker column.
+Names are resolved to tickers via Yahoo Finance search API automatically.
 """
 
+import time
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -19,6 +19,7 @@ from lib.claude_analyst import analyse_portfolio
 from lib.refresh import market_status, timestamp_ist
 from lib.auth import check_password, logout_button
 from lib.xirr import xirr_summary, build_cashflows, xirr
+from lib.symbol_resolver import resolve_ticker_column
 
 st.set_page_config(page_title="Portfolio | NSE Market Analyst",
                    page_icon="💼", layout="wide")
@@ -41,7 +42,7 @@ st.markdown("""
 col_h1, col_h2 = st.columns([4, 1])
 with col_h1:
     st.markdown("## 💼 Portfolio Tracker")
-    st.caption("Upload one transaction file → live P&L on the left · XIRR on the right")
+    st.caption("Upload one file — ticker or company name accepted · live P&L left · XIRR right")
 with col_h2:
     st.markdown(f"""
     <div style="text-align:right;padding-top:10px;">
@@ -54,34 +55,34 @@ with col_h2:
 
 logout_button()
 
-# ── Template + single file upload ────────────────────────────────────────────
+# ── Template + upload ─────────────────────────────────────────────────────────
 with st.expander("📂 Upload Transaction File", expanded=True):
     st.markdown("""
-    Upload **one CSV or Excel file** — it drives both the live portfolio and XIRR.
-    Stock names are resolved automatically from NSE.
+    Upload **one CSV or Excel file**. You can use **NSE ticker symbols OR company names**
+    in the Ticker column — the app resolves names to tickers automatically.
 
-    | Column | Format | Example |
-    |---|---|---|
-    | **Date** | YYYY-MM-DD | 2023-01-15 |
-    | **Ticker** | NSE symbol | RELIANCE |
-    | **Type** | BUY / SELL / DIVIDEND | BUY |
-    | **Quantity** | Shares transacted | 10 |
-    | **Price** | Price per share (₹) | 2500 |
-    | **Avg Cost (₹)** | Your blended avg cost for current holding | 2350 |
-    | **Current Holdings** | Shares held today — fill for active rows only | 10 |
-    | **Notes** | Optional | — |
+    | Column | Format | Example (ticker) | Example (name) |
+    |---|---|---|---|
+    | **Date** | YYYY-MM-DD | 2023-01-15 | 2023-01-15 |
+    | **Ticker** | NSE symbol or company name | RELIANCE | Reliance Industries |
+    | **Type** | BUY / SELL / DIVIDEND | BUY | BUY |
+    | **Quantity** | Shares transacted | 10 | 10 |
+    | **Price** | Price per share (₹) | 2500 | 2500 |
+    | **Avg Cost (₹)** | Blended avg cost for current holding | 2350 | 2350 |
+    | **Current Holdings** | Shares held today — active rows only | 10 | 10 |
+    | **Notes** | Optional | — | — |
 
-    > 💡 Fill **Avg Cost (₹)** and **Current Holdings** on the latest active row per ticker.
-    > Leave them blank on historical / fully-exited rows.
+    > 💡 Column order doesn't matter. Extra columns are ignored.
+    > Fill **Avg Cost** and **Current Holdings** only on the latest active row per stock.
     """)
 
     template_df = pd.DataFrame([
-        {"Date":"2023-01-15","Ticker":"RELIANCE","Type":"BUY",     "Quantity":10,"Price":2400,"Avg Cost (₹)":2400,"Current Holdings":10,"Notes":"Initial buy"},
-        {"Date":"2023-06-10","Ticker":"RELIANCE","Type":"BUY",     "Quantity":5, "Price":2200,"Avg Cost (₹)":2333,"Current Holdings":15,"Notes":"Added more"},
-        {"Date":"2023-03-01","Ticker":"TCS",     "Type":"BUY",     "Quantity":5, "Price":3800,"Avg Cost (₹)":3800,"Current Holdings":5, "Notes":""},
-        {"Date":"2023-09-20","Ticker":"HDFCBANK","Type":"BUY",     "Quantity":20,"Price":1600,"Avg Cost (₹)":1600,"Current Holdings":20,"Notes":""},
-        {"Date":"2024-01-05","Ticker":"HDFCBANK","Type":"SELL",    "Quantity":5, "Price":1750,"Avg Cost (₹)":"",  "Current Holdings":"","Notes":"Partial exit"},
-        {"Date":"2024-02-10","Ticker":"RELIANCE","Type":"DIVIDEND","Quantity":"","Price":"",  "Avg Cost (₹)":"",  "Current Holdings":"","Notes":"Div ₹9/share"},
+        {"Date":"2023-01-15","Ticker":"RELIANCE",          "Type":"BUY",     "Quantity":10,"Price":2400,"Avg Cost (₹)":2400,"Current Holdings":10,"Notes":"Can use ticker"},
+        {"Date":"2023-06-10","Ticker":"Reliance Industries","Type":"BUY",     "Quantity":5, "Price":2200,"Avg Cost (₹)":2333,"Current Holdings":15,"Notes":"Or company name"},
+        {"Date":"2023-03-01","Ticker":"Tata Consultancy",   "Type":"BUY",     "Quantity":5, "Price":3800,"Avg Cost (₹)":3800,"Current Holdings":5, "Notes":"Name works too"},
+        {"Date":"2023-09-20","Ticker":"HDFCBANK",           "Type":"BUY",     "Quantity":20,"Price":1600,"Avg Cost (₹)":1600,"Current Holdings":20,"Notes":""},
+        {"Date":"2024-01-05","Ticker":"HDFCBANK",           "Type":"SELL",    "Quantity":5, "Price":1750,"Avg Cost (₹)":"",  "Current Holdings":"","Notes":"Partial exit"},
+        {"Date":"2024-02-10","Ticker":"RELIANCE",           "Type":"DIVIDEND","Quantity":"","Price":"",  "Avg Cost (₹)":"",  "Current Holdings":"","Notes":"Div ₹9/share"},
     ])
     st.dataframe(template_df, use_container_width=True, hide_index=True)
     st.download_button("⬇️ Download CSV Template",
@@ -99,7 +100,7 @@ if not uploaded:
     st.info("⬆️ Upload your transaction file above to get started.")
     st.stop()
 
-# ── Parse file (once, cached) ─────────────────────────────────────────────────
+# ── Parse file ────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def parse_file(file_bytes: bytes, file_name: str):
     import io
@@ -107,12 +108,12 @@ def parse_file(file_bytes: bytes, file_name: str):
     df  = pd.read_csv(buf) if file_name.lower().endswith(".csv") else pd.read_excel(buf)
     df.columns = [c.strip() for c in df.columns]
 
-    # Flexible column name mapping
     col_map = {}
     for col in df.columns:
-        cl = col.lower().replace(" ", "").replace("(₹)","").replace("(rs)","")
+        cl = col.lower().replace(" ","").replace("(₹)","").replace("(rs)","")
         if   cl in ["date","transactiondate","txdate"]:              col_map[col] = "Date"
-        elif cl in ["ticker","symbol","nsesymbol","stock","scrip"]:  col_map[col] = "Ticker"
+        elif cl in ["ticker","symbol","nsesymbol","stock","scrip",
+                    "company","companyname","stockname","name"]:     col_map[col] = "Ticker"
         elif cl in ["type","transactiontype","txtype","action"]:     col_map[col] = "Type"
         elif cl in ["quantity","qty","shares","units"]:              col_map[col] = "Quantity"
         elif cl in ["price","pricepershare","tradeprice"]:           col_map[col] = "Price"
@@ -127,31 +128,48 @@ def parse_file(file_bytes: bytes, file_name: str):
     if missing:
         return None, f"Missing required columns: {missing}"
 
-    # Types
     df["Date"]             = pd.to_datetime(df["Date"], errors="coerce")
     df["Quantity"]         = pd.to_numeric(df.get("Quantity",         pd.Series(dtype=float)), errors="coerce").fillna(0)
     df["Price"]            = pd.to_numeric(df.get("Price",            pd.Series(dtype=float)), errors="coerce").fillna(0)
     df["Avg Cost (₹)"]     = pd.to_numeric(df.get("Avg Cost (₹)",     pd.Series(dtype=float)), errors="coerce")
     df["Current Holdings"] = pd.to_numeric(df.get("Current Holdings", pd.Series(dtype=float)), errors="coerce")
     df["Notes"]            = df.get("Notes", pd.Series([""] * len(df))).fillna("")
-    df["Ticker"]           = df["Ticker"].astype(str).str.strip().str.upper() \
-                               .str.replace(r"^(NSE:|BSE:|NSE/|BSE/)", "", regex=True).str.strip()
+    df["Ticker"]           = df["Ticker"].astype(str).str.strip()
     df["Type"]             = df["Type"].astype(str).str.strip().str.upper()
     df = df.sort_values("Date").reset_index(drop=True)
     return df, None
 
 file_bytes = uploaded.read()
-df_tx, parse_error = parse_file(file_bytes, uploaded.name)
+df_raw, parse_error = parse_file(file_bytes, uploaded.name)
 
 if parse_error:
     st.error(parse_error)
     st.stop()
 
+# ── Resolve names → tickers ───────────────────────────────────────────────────
+with st.spinner("Resolving stock names / tickers via Yahoo Finance…"):
+    resolved_df = resolve_ticker_column(df_raw["Ticker"])
+
+# Show resolution results so user can verify
+unresolved = resolved_df[resolved_df["ticker"] == resolved_df["raw"].str.upper()]
+if not unresolved.empty:
+    with st.expander(f"⚠️ {len(unresolved)} entries could not be confirmed — verify these"):
+        st.dataframe(unresolved[["raw","ticker"]], use_container_width=True, hide_index=True)
+        st.caption("These were kept as-is. If wrong, update your file with the exact NSE ticker.")
+
+# Apply resolved tickers back to df
+df_tx = df_raw.copy()
+ticker_map = dict(zip(resolved_df["raw"], resolved_df["ticker"]))
+name_map   = dict(zip(resolved_df["raw"], resolved_df["name"]))
+df_tx["Ticker"]       = df_tx["Ticker"].map(ticker_map).fillna(df_tx["Ticker"].str.upper())
+df_tx["Resolved Name"]= df_raw["Ticker"].map(name_map)
+
 st.success(f"✅ Loaded {len(df_tx)} transactions · {df_tx['Ticker'].nunique()} stocks")
 with st.expander("📄 View Parsed Transactions"):
-    st.dataframe(df_tx, use_container_width=True, hide_index=True)
+    st.dataframe(df_tx.drop(columns=["Resolved Name"], errors="ignore"),
+                 use_container_width=True, hide_index=True)
 
-# ── Fetch live prices + names (once, cached 60 s) ────────────────────────────
+# ── Fetch live prices ─────────────────────────────────────────────────────────
 all_tickers = tuple(sorted(df_tx["Ticker"].unique().tolist()))
 
 @st.cache_data(show_spinner=False, ttl=60)
@@ -166,19 +184,22 @@ def fetch_quotes(tickers: tuple) -> dict:
         }
     return result
 
-with st.spinner("Fetching live prices & stock names from NSE…"):
+with st.spinner("Fetching live prices from NSE…"):
     quotes = fetch_quotes(all_tickers)
 
-# current_prices dict used by xirr_summary / build_cashflows
+# Override name with Yahoo-resolved name where get_quote returned just the ticker
+for tk in all_tickers:
+    raw_entries = [r for r, t in ticker_map.items() if t == tk]
+    if raw_entries and (quotes[tk]["name"] == tk):
+        quotes[tk]["name"] = name_map.get(raw_entries[0], tk)
+
 current_prices = {tk: v["price"] for tk, v in quotes.items() if v["price"]}
 
-# ── Prepare df for xirr.py ────────────────────────────────────────────────────
-# xirr_summary expects columns: Date (date), Ticker, Type, Quantity, Price
-# Convert Date to date objects (xirr core needs date, not datetime)
+# ── Prep for xirr.py (needs date objects, not datetime) ──────────────────────
 df_for_xirr = df_tx.copy()
 df_for_xirr["Date"] = df_for_xirr["Date"].dt.date
 
-# ── Live portfolio from Current Holdings column ───────────────────────────────
+# ── Build live portfolio from Current Holdings column ─────────────────────────
 active = (
     df_tx[df_tx["Current Holdings"].notna() & (df_tx["Current Holdings"] > 0)]
     .sort_values("Date")
@@ -218,7 +239,7 @@ with col_left:
     st.markdown("### 📊 Live Portfolio")
 
     if df_live.empty:
-        st.warning("No active holdings found. Ensure 'Current Holdings' > 0 for your active rows.")
+        st.warning("No active holdings found. Ensure 'Current Holdings' > 0 for active rows.")
     else:
         total_invested = df_live["Invested (₹)"].sum()
         total_value    = df_live["Value (₹)"].sum()
@@ -262,7 +283,7 @@ with col_left:
                 st.markdown(analysis)
 
 # ════════════════════════════════════════════════════════════════════════════
-# RIGHT — XIRR  (uses df_for_xirr — same data, no second upload)
+# RIGHT — XIRR
 # ════════════════════════════════════════════════════════════════════════════
 with col_right:
     st.markdown("### 📈 XIRR Calculator")
