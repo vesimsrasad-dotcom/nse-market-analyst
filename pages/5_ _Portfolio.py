@@ -342,10 +342,11 @@ with col_right:
         display_xirr.insert(1, "Name",
             display_xirr["Ticker"].map(lambda t: quotes.get(t, {}).get("name", t)))
 
-        st.dataframe(
-            display_xirr.style.applymap(style_xirr, subset=["XIRR (%)"]),
-            use_container_width=True, hide_index=True
-        )
+        try:
+            styled = display_xirr.style.map(style_xirr, subset=["XIRR (%)"])
+        except AttributeError:
+            styled = display_xirr.style.applymap(style_xirr, subset=["XIRR (%)"])
+        st.dataframe(styled, use_container_width=True, hide_index=True)
 
         st.markdown("""
         > **XIRR guide:** 🟢 >15% Strong · 🟡 0–15% Moderate · 🔴 Negative — Loss
