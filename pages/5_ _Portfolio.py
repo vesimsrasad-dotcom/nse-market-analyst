@@ -1,26 +1,25 @@
 """
 pages/5_ _Portfolio.py
-Portfolio tracker with live P&L (left) and XIRR calculator (right) — single tab.
+Single-file upload → Live Portfolio (left) + XIRR (right).
+
+Accepts either NSE ticker symbols OR company names in the Ticker column.
+Names are resolved to tickers via Yahoo Finance search API automatically.
 """
 
+import time
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
+
 from lib.config import DISCLAIMER, ANTHROPIC_API_KEY, normalise_symbol
-from lib.market_data import enrich_portfolio, get_quote
-from lib.portfolio import (
-    load_portfolio, save_portfolio, add_holding, remove_holding,
-    portfolio_summary_text, concentration_warnings,
-)
+from lib.market_data import get_quote
 from lib.charts import portfolio_pie, portfolio_bar
 from lib.claude_analyst import analyse_portfolio
 from lib.refresh import market_status, timestamp_ist
 from lib.auth import check_password, logout_button
-from lib.xirr import (
-    parse_transaction_file, xirr_summary, build_cashflows,
-    xirr, xirr_pct, TEMPLATE_EXAMPLE, TEMPLATE_COLUMNS
-)
+from lib.xirr import xirr_summary, build_cashflows, xirr
+from lib.symbol_resolver import resolve_ticker_column   # ← was missing
 
 st.set_page_config(page_title="Portfolio | NSE Market Analyst",
                    page_icon="💼", layout="wide")
@@ -28,22 +27,14 @@ st.set_page_config(page_title="Portfolio | NSE Market Analyst",
 if not check_password():
     st.stop()
 
-_ms = market_status()
+_ms    = market_status()
 _count = st_autorefresh(interval=_ms["interval_ms"], key="port_autorefresh")
 
 st.markdown("""
 <style>
   html, body, [class*="css"] { font-size: 17px !important; }
-  .summary-card { background:#1A1F2E; border-radius:10px; padding:16px 20px;
-    border:1px solid rgba(255,255,255,0.06); text-align:center; }
-  .green { color: #00C853; } .red { color: #FF1744; }
-  .xirr-good  { color: #00C853; font-weight:700; }
-  .xirr-ok    { color: #FFD600; font-weight:700; }
-  .xirr-bad   { color: #FF1744; font-weight:700; }
   .disclaimer { font-size:11px; color:#555; text-align:center;
     border-top:1px solid #222; padding-top:10px; margin-top:30px; }
-  .col-divider { border-left: 1px solid rgba(255,255,255,0.08);
-    padding-left: 2rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -51,7 +42,7 @@ st.markdown("""
 col_h1, col_h2 = st.columns([4, 1])
 with col_h1:
     st.markdown("## 💼 Portfolio Tracker")
-    st.caption("Live P&L on the left · XIRR calculator on the right")
+    st.caption("Upload one file — ticker or company name accepted · live P&L left · XIRR right")
 with col_h2:
     st.markdown(f"""
     <div style="text-align:right;padding-top:10px;">
@@ -64,377 +55,318 @@ with col_h2:
 
 logout_button()
 
-st.divider()
+# ── Template + upload ─────────────────────────────────────────────────────────
+with st.expander("📂 Upload Transaction File", expanded=True):
+    st.markdown("""
+    Upload **one CSV or Excel file**. You can use **NSE ticker symbols OR company names**
+    in the Ticker column — the app resolves names to tickers automatically.
+
+    | Column | Format | Example (ticker) | Example (name) |
+    |---|---|---|---|
+    | **Date** | YYYY-MM-DD | 2023-01-15 | 2023-01-15 |
+    | **Ticker** | NSE symbol or company name | RELIANCE | Reliance Industries |
+    | **Type** | BUY / SELL / DIVIDEND | BUY | BUY |
+    | **Quantity** | Shares transacted | 10 | 10 |
+    | **Price** | Price per share (₹) | 2500 | 2500 |
+    | **Avg Cost (₹)** | Blended avg cost for current holding | 2350 | 2350 |
+    | **Current Holdings** | Shares held today — active rows only | 10 | 10 |
+    | **Notes** | Optional | — | — |
+
+    > 💡 Column order doesn't matter. Extra columns are ignored.
+    > Fill **Avg Cost** and **Current Holdings** only on the latest active row per stock.
+    """)
+
+    template_df = pd.DataFrame([
+        {"Date":"2023-01-15","Ticker":"RELIANCE",           "Type":"BUY",     "Quantity":10,"Price":2400,"Avg Cost (₹)":2400,"Current Holdings":10,"Notes":"Can use ticker"},
+        {"Date":"2023-06-10","Ticker":"Reliance Industries", "Type":"BUY",     "Quantity":5, "Price":2200,"Avg Cost (₹)":2333,"Current Holdings":15,"Notes":"Or company name"},
+        {"Date":"2023-03-01","Ticker":"Tata Consultancy",    "Type":"BUY",     "Quantity":5, "Price":3800,"Avg Cost (₹)":3800,"Current Holdings":5, "Notes":"Name works too"},
+        {"Date":"2023-09-20","Ticker":"HDFCBANK",            "Type":"BUY",     "Quantity":20,"Price":1600,"Avg Cost (₹)":1600,"Current Holdings":20,"Notes":""},
+        {"Date":"2024-01-05","Ticker":"HDFCBANK",            "Type":"SELL",    "Quantity":5, "Price":1750,"Avg Cost (₹)":"",  "Current Holdings":"","Notes":"Partial exit"},
+        {"Date":"2024-02-10","Ticker":"RELIANCE",            "Type":"DIVIDEND","Quantity":"","Price":"",  "Avg Cost (₹)":"",  "Current Holdings":"","Notes":"Div ₹9/share"},
+    ])
+    st.dataframe(template_df, use_container_width=True, hide_index=True)
+    st.download_button("⬇️ Download CSV Template",
+                       data=template_df.to_csv(index=False).encode(),
+                       file_name="portfolio_transactions_template.csv",
+                       mime="text/csv", key="tmpl_dl")
+
+    uploaded = st.file_uploader(
+        "Upload your transaction file (CSV or Excel)",
+        type=["csv", "xlsx", "xls"],
+        key="main_upload"
+    )
+
+if not uploaded:
+    st.info("⬆️ Upload your transaction file above to get started.")
+    st.stop()
+
+# ── Parse file ────────────────────────────────────────────────────────────────
+@st.cache_data(show_spinner=False)
+def parse_file(file_bytes: bytes, file_name: str):
+    import io
+    buf = io.BytesIO(file_bytes)
+    df  = pd.read_csv(buf) if file_name.lower().endswith(".csv") else pd.read_excel(buf)
+    df.columns = [c.strip() for c in df.columns]
+
+    col_map = {}
+    for col in df.columns:
+        cl = col.lower().replace(" ","").replace("(₹)","").replace("(rs)","")
+        if   cl in ["date","transactiondate","txdate"]:              col_map[col] = "Date"
+        elif cl in ["ticker","symbol","nsesymbol","stock","scrip",
+                    "company","companyname","stockname","name"]:     col_map[col] = "Ticker"
+        elif cl in ["type","transactiontype","txtype","action"]:     col_map[col] = "Type"
+        elif cl in ["quantity","qty","shares","units"]:              col_map[col] = "Quantity"
+        elif cl in ["price","pricepershare","tradeprice"]:           col_map[col] = "Price"
+        elif cl in ["avgcost","averagecost","avgprice","costprice"]: col_map[col] = "Avg Cost (₹)"
+        elif cl in ["currentholdings","holdingqty","currentqty",
+                    "holdings","heldqty"]:                           col_map[col] = "Current Holdings"
+        elif cl in ["notes","note","remarks","comment"]:             col_map[col] = "Notes"
+    df = df.rename(columns=col_map)
+
+    required = ["Date", "Ticker", "Type"]
+    missing  = [c for c in required if c not in df.columns]
+    if missing:
+        return None, f"Missing required columns: {missing}"
+
+    df["Date"]             = pd.to_datetime(df["Date"], errors="coerce")
+    df["Quantity"]         = pd.to_numeric(df.get("Quantity",         pd.Series(dtype=float)), errors="coerce").fillna(0)
+    df["Price"]            = pd.to_numeric(df.get("Price",            pd.Series(dtype=float)), errors="coerce").fillna(0)
+    df["Avg Cost (₹)"]     = pd.to_numeric(df.get("Avg Cost (₹)",     pd.Series(dtype=float)), errors="coerce")
+    df["Current Holdings"] = pd.to_numeric(df.get("Current Holdings", pd.Series(dtype=float)), errors="coerce")
+    df["Notes"]            = df.get("Notes", pd.Series([""] * len(df))).fillna("")
+    df["Ticker"]           = df["Ticker"].astype(str).str.strip()
+    df["Type"]             = df["Type"].astype(str).str.strip().str.upper()
+    df = df.sort_values("Date").reset_index(drop=True)
+    return df, None
+
+file_bytes = uploaded.read()
+df_raw, parse_error = parse_file(file_bytes, uploaded.name)
+
+if parse_error:
+    st.error(parse_error)
+    st.stop()
+
+# ── Resolve names → tickers ───────────────────────────────────────────────────
+with st.spinner("Resolving stock names / tickers via Yahoo Finance…"):
+    resolved_df = resolve_ticker_column(df_raw["Ticker"])
+
+# Show any entries that could not be confirmed
+unresolved = resolved_df[resolved_df["ticker"] == resolved_df["raw"].str.upper()]
+if not unresolved.empty:
+    with st.expander(f"⚠️ {len(unresolved)} entries could not be confirmed — verify these"):
+        st.dataframe(unresolved[["raw","ticker"]], use_container_width=True, hide_index=True)
+        st.caption("These were kept as-is. If wrong, update your file with the exact NSE ticker.")
+
+# Apply resolved tickers back to df
+df_tx      = df_raw.copy()
+ticker_map = dict(zip(resolved_df["raw"], resolved_df["ticker"]))
+name_map   = dict(zip(resolved_df["raw"], resolved_df["name"]))
+df_tx["Ticker"]        = df_tx["Ticker"].map(ticker_map).fillna(df_tx["Ticker"].str.upper())
+df_tx["Resolved Name"] = df_raw["Ticker"].map(name_map)
+
+st.success(f"✅ Loaded {len(df_tx)} transactions · {df_tx['Ticker'].nunique()} stocks")
+with st.expander("📄 View Parsed Transactions"):
+    st.dataframe(df_tx.drop(columns=["Resolved Name"], errors="ignore"),
+                 use_container_width=True, hide_index=True)
+
+# ── Fetch live prices ─────────────────────────────────────────────────────────
+all_tickers = tuple(sorted(df_tx["Ticker"].unique().tolist()))
+
+@st.cache_data(show_spinner=False, ttl=60)
+def fetch_quotes(tickers: tuple) -> dict:
+    result = {}
+    for tk in tickers:
+        norm = normalise_symbol(tk)
+        q    = get_quote(norm)
+        result[tk] = {
+            "price": q.get("price"),
+            "name":  q.get("name") or q.get("companyName") or tk,
+        }
+    return result
+
+with st.spinner("Fetching live prices from NSE…"):
+    quotes = fetch_quotes(all_tickers)
+
+# Fill in Yahoo-resolved name where get_quote only returned the ticker
+for tk in all_tickers:
+    if quotes[tk]["name"] == tk:
+        raw_entries = [r for r, t in ticker_map.items() if t == tk]
+        if raw_entries:
+            quotes[tk]["name"] = name_map.get(raw_entries[0], tk)
+
+current_prices = {tk: v["price"] for tk, v in quotes.items() if v["price"]}
+
+# ── Prep df for xirr.py (needs date objects, not datetime) ───────────────────
+df_for_xirr = df_tx.copy()
+df_for_xirr["Date"] = df_for_xirr["Date"].dt.date
+
+# ── Build live portfolio from Current Holdings column ─────────────────────────
+active = (
+    df_tx[df_tx["Current Holdings"].notna() & (df_tx["Current Holdings"] > 0)]
+    .sort_values("Date")
+    .groupby("Ticker")
+    .last()
+    .reset_index()
+)
+
+live_rows = []
+for _, row in active.iterrows():
+    tk       = row["Ticker"]
+    cmp      = quotes.get(tk, {}).get("price") or 0
+    name     = quotes.get(tk, {}).get("name", tk)
+    qty      = row["Current Holdings"]
+    avg      = row["Avg Cost (₹)"] if pd.notna(row.get("Avg Cost (₹)")) else 0
+    invested = qty * avg
+    value    = qty * cmp
+    pnl      = value - invested
+    pnl_pct  = (pnl / invested * 100) if invested else 0
+    live_rows.append({
+        "Name": name, "Ticker": tk, "Qty": qty,
+        "Avg Cost": avg, "CMP": cmp,
+        "Invested (₹)": invested, "Value (₹)": value,
+        "P&L (₹)": pnl, "P&L (%)": pnl_pct,
+    })
+
+df_live = pd.DataFrame(live_rows) if live_rows else pd.DataFrame()
 
 # ── Two-column layout ─────────────────────────────────────────────────────────
-col_live, col_xirr = st.columns([1, 1], gap="large")
+st.divider()
+col_left, col_right = st.columns([1, 1], gap="large")
 
 # ════════════════════════════════════════════════════════════════════════════
 # LEFT — LIVE PORTFOLIO
 # ════════════════════════════════════════════════════════════════════════════
-with col_live:
+with col_left:
     st.markdown("### 📊 Live Portfolio")
 
-    if "holdings" not in st.session_state:
-        st.session_state.holdings = load_portfolio()
-    holdings = st.session_state.holdings
-
-    # ── Upload Excel / CSV ────────────────────────────────────────────────────
-    with st.expander("📂 Upload Excel / CSV to load portfolio", expanded=len(holdings) == 0):
-        st.markdown("""
-        Upload an Excel or CSV file with your holdings. Required columns:
-
-        | Column | Example |
-        |---|---|
-        | **NSE Symbol** | RELIANCE |
-        | **Quantity** | 50 |
-        | **Avg Cost (₹)** | 1350.00 |
-
-        Optional columns: **Sector**, **Notes**
-        """)
-
-        import io
-        template_df = pd.DataFrame([
-            {"NSE Symbol": "RELIANCE", "Quantity": 10, "Avg Cost (₹)": 2500.00, "Sector": "Energy",  "Notes": ""},
-            {"NSE Symbol": "TCS",      "Quantity": 5,  "Avg Cost (₹)": 3800.00, "Sector": "IT",      "Notes": ""},
-            {"NSE Symbol": "HDFCBANK", "Quantity": 20, "Avg Cost (₹)": 1600.00, "Sector": "Banking", "Notes": ""},
-        ])
-        csv_template = template_df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "⬇️ Download CSV Template",
-            data=csv_template,
-            file_name="portfolio_template.csv",
-            mime="text/csv",
-            key="port_template_dl"
-        )
-        st.caption("💡 Fill in your data, save as .xlsx or .csv and upload.")
-
-        port_file = st.file_uploader(
-            "Upload your portfolio file",
-            type=["csv", "xlsx", "xls"],
-            key="port_upload"
-        )
-
-        if port_file:
-            try:
-                fname = port_file.name.lower()
-                if fname.endswith(".csv"):
-                    df_upload = pd.read_csv(port_file)
-                else:
-                    df_upload = pd.read_excel(port_file)
-
-                df_upload.columns = [c.strip() for c in df_upload.columns]
-                col_map = {}
-                for col in df_upload.columns:
-                    cl = col.lower().replace(" ", "").replace("(₹)","").replace("(rs)","")
-                    if cl in ["nsesymbol","symbol","ticker","stock","scrip"]:
-                        col_map[col] = "ticker"
-                    elif cl in ["quantity","qty","shares","units"]:
-                        col_map[col] = "qty"
-                    elif cl in ["avgcost","averagecost","avgprice","buyprice","cost","price","purchaseprice"]:
-                        col_map[col] = "avg_cost"
-                    elif cl in ["sector","industry"]:
-                        col_map[col] = "sector"
-                    elif cl in ["notes","note","remarks","comment"]:
-                        col_map[col] = "notes"
-
-                df_upload = df_upload.rename(columns=col_map)
-                missing = [c for c in ["ticker","qty","avg_cost"] if c not in df_upload.columns]
-                if missing:
-                    st.error(f"Could not find columns: {missing}.")
-                else:
-                    df_upload["qty"]      = pd.to_numeric(df_upload["qty"],      errors="coerce").fillna(0)
-                    df_upload["avg_cost"] = pd.to_numeric(df_upload["avg_cost"], errors="coerce").fillna(0)
-                    df_upload["ticker"] = (
-                        df_upload["ticker"].astype(str).str.strip().str.upper()
-                        .str.replace(r"^(NSE:|BSE:|NSE/|BSE/|NSE\\|BSE\\)", "", regex=True).str.strip()
-                    )
-                    df_upload["sector"] = df_upload.get("sector", pd.Series([""] * len(df_upload))).fillna("")
-                    df_upload["notes"]  = df_upload.get("notes",  pd.Series([""] * len(df_upload))).fillna("")
-
-                    valid = df_upload[(df_upload["qty"] > 0) & (df_upload["avg_cost"] > 0)]
-                    if valid.empty:
-                        st.error("No valid rows found.")
-                    else:
-                        st.success(f"✅ Found {len(valid)} holdings ready to import")
-                        st.dataframe(valid[["ticker","qty","avg_cost","sector","notes"]],
-                                     use_container_width=True, hide_index=True)
-                        if st.button("📥 Import to Portfolio", type="primary", key="port_import_btn"):
-                            new_holdings = list(holdings)
-                            for _, row in valid.iterrows():
-                                norm = normalise_symbol(str(row["ticker"]))
-                                new_holdings = add_holding(
-                                    new_holdings, norm,
-                                    float(row["qty"]), float(row["avg_cost"]),
-                                    str(row.get("sector","")), str(row.get("notes",""))
-                                )
-                            st.session_state.holdings = new_holdings
-                            save_portfolio(new_holdings)
-                            st.success(f"✅ Imported {len(valid)} holdings!")
-                            st.rerun()
-            except Exception as e:
-                st.error(f"Could not read file: {e}")
-
-    # ── Manual Add ────────────────────────────────────────────────────────────
-    with st.expander("➕ Add single holding manually"):
-        c1, c2, c3 = st.columns([2, 1.5, 1.5])
-        with c1: new_ticker = st.text_input("NSE Symbol", placeholder="RELIANCE", key="port_ticker")
-        with c2: new_qty    = st.number_input("Quantity", min_value=0.01, value=1.0, step=1.0, key="port_qty")
-        with c3: new_cost   = st.number_input("Avg Cost (₹)", min_value=0.01, value=100.0, key="port_cost")
-        c4, c5 = st.columns(2)
-        with c4: new_sector = st.text_input("Sector (optional)", key="port_sector")
-        with c5: new_notes  = st.text_input("Notes (optional)", key="port_notes")
-
-        if st.button("Add to Portfolio", type="primary", key="port_add"):
-            if new_ticker:
-                norm = normalise_symbol(new_ticker)
-                holdings = add_holding(holdings, norm, new_qty, new_cost, new_sector, new_notes)
-                st.session_state.holdings = holdings
-                save_portfolio(holdings)
-                st.success(f"Added {norm}")
-                st.rerun()
-            else:
-                st.warning("Please enter a ticker symbol.")
-
-    if not holdings:
-        st.info("No holdings yet. Add your first stock above.")
+    if df_live.empty:
+        st.warning("No active holdings found. Ensure 'Current Holdings' > 0 for active rows.")
     else:
-        with st.spinner("Fetching live prices…"):
-            df = enrich_portfolio(holdings)
-
-        # Remove / Clear controls
-        remove_col, clear_col = st.columns([2, 1.5])
-        with remove_col:
-            remove_ticker = st.selectbox("Remove holding",
-                ["— select —"] + [h["ticker"] for h in holdings], key="port_remove")
-            if remove_ticker != "— select —":
-                if st.button("🗑️ Remove selected", key="port_remove_btn"):
-                    holdings = remove_holding(holdings, remove_ticker)
-                    st.session_state.holdings = holdings
-                    save_portfolio(holdings)
-                    st.rerun()
-        with clear_col:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("🗑️ Clear ALL", key="port_clear_all", type="secondary"):
-                st.session_state["confirm_clear"] = True
-
-        if st.session_state.get("confirm_clear"):
-            st.warning("⚠️ This will remove all holdings permanently. Are you sure?")
-            c1, c2, _ = st.columns([1, 1, 3])
-            with c1:
-                if st.button("✅ Yes, clear all", type="primary", key="port_confirm_clear"):
-                    st.session_state.holdings = []
-                    save_portfolio([])
-                    st.session_state["confirm_clear"] = False
-                    st.success("All holdings cleared.")
-                    st.rerun()
-            with c2:
-                if st.button("❌ Cancel", key="port_cancel_clear"):
-                    st.session_state["confirm_clear"] = False
-                    st.rerun()
-
-        # Summary metrics
-        total_invested = df["Invested (₹)"].sum()
-        total_value    = df["Value (₹)"].sum()
+        total_invested = df_live["Invested (₹)"].sum()
+        total_value    = df_live["Value (₹)"].sum()
         total_pnl      = total_value - total_invested
         total_pnl_pct  = (total_pnl / total_invested * 100) if total_invested else 0
 
-        st.divider()
         m1, m2 = st.columns(2)
         with m1: st.metric("Total Invested", f"₹{total_invested:,.0f}")
         with m2: st.metric("Current Value",  f"₹{total_value:,.0f}")
         m3, m4 = st.columns(2)
         with m3: st.metric("Unrealized P&L", f"₹{total_pnl:+,.0f}", delta=f"{total_pnl_pct:+.1f}%")
-        with m4: st.metric("Holdings", len(df))
-
-        for w in concentration_warnings(df):
-            st.warning(w)
+        with m4: st.metric("Holdings", len(df_live))
 
         st.divider()
         st.markdown("#### Holdings Detail")
-        disp = df.copy()
+        disp = df_live.copy()
         disp["P&L (₹)"]      = disp["P&L (₹)"].map(lambda x: f"₹{x:+,.0f}")
         disp["P&L (%)"]      = disp["P&L (%)"].map(lambda x: f"{x:+.1f}%")
         disp["CMP"]          = disp["CMP"].map(lambda x: f"₹{x:,.2f}")
         disp["Avg Cost"]     = disp["Avg Cost"].map(lambda x: f"₹{x:,.2f}")
         disp["Invested (₹)"] = disp["Invested (₹)"].map(lambda x: f"₹{x:,.0f}")
         disp["Value (₹)"]    = disp["Value (₹)"].map(lambda x: f"₹{x:,.0f}")
-        st.dataframe(disp[[
-            "Name","Ticker","Qty","Avg Cost","CMP",
-            "Invested (₹)","Value (₹)","P&L (₹)","P&L (%)","Sector"
-        ]], use_container_width=True, hide_index=True)
+        st.dataframe(disp[["Name","Ticker","Qty","Avg Cost","CMP",
+                            "Invested (₹)","Value (₹)","P&L (₹)","P&L (%)"]],
+                     use_container_width=True, hide_index=True)
 
         st.divider()
-        st.plotly_chart(portfolio_pie(df, "Value (₹)", "Name", "By Stock"),
+        st.plotly_chart(portfolio_pie(df_live, "Value (₹)", "Name", "By Stock"),
                         use_container_width=True, config={"displayModeBar": False})
-        sec_df = df.groupby("Sector")["Value (₹)"].sum().reset_index()
-        sec_df.columns = ["Name", "Value (₹)"]
-        st.plotly_chart(portfolio_pie(sec_df, title="By Sector"),
+        st.plotly_chart(portfolio_bar(df_live),
                         use_container_width=True, config={"displayModeBar": False})
-        st.plotly_chart(portfolio_bar(df), use_container_width=True, config={"displayModeBar": False})
 
-        st.divider()
-        st.markdown("#### 🤖 AI Portfolio Analysis")
-        if not ANTHROPIC_API_KEY:
-            st.warning("Add `ANTHROPIC_API_KEY` to enable AI analysis.")
-        else:
+        if ANTHROPIC_API_KEY:
+            st.divider()
+            st.markdown("#### 🤖 AI Portfolio Analysis")
             if st.button("Generate Portfolio Analysis", type="primary", key="port_ai"):
+                summary = df_live[["Name","Ticker","Qty","Avg Cost","CMP",
+                                   "Invested (₹)","Value (₹)","P&L (%)"]].to_string(index=False)
                 with st.spinner("Claude is reviewing your portfolio…"):
-                    analysis = analyse_portfolio(portfolio_summary_text(df))
+                    analysis = analyse_portfolio(summary)
                 st.markdown(analysis)
 
 # ════════════════════════════════════════════════════════════════════════════
-# RIGHT — XIRR CALCULATOR
+# RIGHT — XIRR
 # ════════════════════════════════════════════════════════════════════════════
-with col_xirr:
+with col_right:
     st.markdown("### 📈 XIRR Calculator")
-    st.markdown("Upload your **transaction history** to calculate the true annualised return (XIRR) per stock and overall portfolio.")
 
-    # ── Template Download ────────────────────────────────────────────────────
-    with st.expander("📋 Download Template / View Format", expanded=True):
-        st.markdown("""
-        Your file must have these columns:
+    df_xirr = xirr_summary(df_for_xirr, current_prices)
 
-        | Column | Format | Example |
-        |---|---|---|
-        | **Date** | YYYY-MM-DD | 2023-01-15 |
-        | **Ticker** | NSE symbol | RELIANCE |
-        | **Type** | BUY / SELL / DIVIDEND | BUY |
-        | **Quantity** | Number of shares | 10 |
-        | **Price** | Price per share in ₹ | 2500 |
-        | **Notes** | Optional | Initial buy |
-        """)
-        st.markdown("**Example data:**")
-        st.dataframe(TEMPLATE_EXAMPLE, use_container_width=True, hide_index=True)
-        csv_bytes = TEMPLATE_EXAMPLE.to_csv(index=False).encode()
-        st.download_button(
-            "⬇️ Download CSV Template",
-            data=csv_bytes,
-            file_name="nse_transactions_template.csv",
-            mime="text/csv",
-            key="xirr_template_dl"
+    if df_xirr.empty:
+        st.warning("Could not calculate XIRR. Ensure the file has valid BUY/SELL/DIVIDEND rows.")
+    else:
+        all_flows      = build_cashflows(df_for_xirr, current_prices).get("__portfolio__", [])
+        portfolio_xirr = xirr(all_flows)
+        port_xirr_pct  = f"{portfolio_xirr * 100:.2f}%" if portfolio_xirr else "N/A"
+
+        total_inv  = df_xirr["Invested (₹)"].sum()
+        total_cur  = df_xirr["Current Value (₹)"].sum()
+        total_real = df_xirr["Realised (₹)"].sum()
+        total_div  = df_xirr["Dividends (₹)"].sum()
+
+        m1, m2 = st.columns(2)
+        with m1: st.metric("Total Invested", f"₹{total_inv:,.0f}")
+        with m2: st.metric("Current Value",  f"₹{total_cur:,.0f}")
+        m3, m4 = st.columns(2)
+        with m3: st.metric("Realised + Divs", f"₹{total_real + total_div:,.0f}")
+        with m4:
+            color = "#00C853" if portfolio_xirr and portfolio_xirr > 0 else "#FF1744"
+            st.markdown(f"""
+            <div style="background:#1A1F2E;border-radius:10px;padding:14px 16px;
+                        border:1px solid rgba(255,255,255,0.06);text-align:center;">
+              <div style="font-size:12px;color:#888;text-transform:uppercase;">Portfolio XIRR</div>
+              <div style="font-size:28px;font-weight:700;color:{color};">{port_xirr_pct}</div>
+              <div style="font-size:11px;color:#555;">Annualised return</div>
+            </div>""", unsafe_allow_html=True)
+
+        st.divider()
+        st.markdown("#### Per-Stock XIRR Breakdown")
+
+        def style_xirr(val):
+            if val is None or (isinstance(val, float) and pd.isna(val)):
+                return "color: #888"
+            if val >= 15: return "color: #00C853; font-weight: bold"
+            if val >= 0:  return "color: #FFD600; font-weight: bold"
+            return "color: #FF1744; font-weight: bold"
+
+        display_xirr = df_xirr.copy()
+        for col in ["Invested (₹)", "Realised (₹)", "Dividends (₹)", "Current Value (₹)"]:
+            if col in display_xirr.columns:
+                display_xirr[col] = display_xirr[col].map(lambda x: f"₹{x:,.0f}")
+        display_xirr.insert(1, "Name",
+            display_xirr["Ticker"].map(lambda t: quotes.get(t, {}).get("name", t)))
+
+        st.dataframe(
+            display_xirr.style.applymap(style_xirr, subset=["XIRR (%)"]),
+            use_container_width=True, hide_index=True
         )
 
-    # ── File Upload ──────────────────────────────────────────────────────────
-    st.divider()
-    uploaded = st.file_uploader(
-        "Upload your transaction file (CSV or Excel)",
-        type=["csv", "xlsx", "xls"],
-        key="xirr_upload"
-    )
+        st.markdown("""
+        > **XIRR guide:** 🟢 >15% Strong · 🟡 0–15% Moderate · 🔴 Negative — Loss
+        >
+        > *XIRR weights each transaction by its date for a true annualised return.*
+        """)
 
-    if not uploaded:
-        st.info("Upload your transaction file above to calculate XIRR.")
-    else:
-        df_tx, errors = parse_transaction_file(uploaded)
+        valid = df_xirr.dropna(subset=["XIRR (%)"])
+        if not valid.empty:
+            bar_labels = valid["Ticker"].map(lambda t: quotes.get(t, {}).get("name", t))
+            bar_colors = ["#00C853" if x >= 0 else "#FF1744" for x in valid["XIRR (%)"]]
+            fig = go.Figure(go.Bar(
+                x=bar_labels, y=valid["XIRR (%)"],
+                marker_color=bar_colors,
+                text=[f"{v:+.1f}%" for v in valid["XIRR (%)"]],
+                textposition="outside",
+            ))
+            fig.add_hline(y=0, line_color="#555", line_dash="dash")
+            fig.update_layout(
+                template="plotly_dark",
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                height=360, title="XIRR by Stock (%)",
+                yaxis_ticksuffix="%", xaxis_tickangle=-30,
+                margin=dict(l=40, r=30, t=50, b=80),
+            )
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        if errors:
-            for e in errors:
-                st.error(e)
-
-        if not df_tx.empty:
-            st.success(f"✅ Loaded {len(df_tx)} transactions for {df_tx['Ticker'].nunique()} stocks")
-
-            with st.expander("📄 View Parsed Transactions"):
-                st.dataframe(df_tx, use_container_width=True, hide_index=True)
-
-            # ── Fetch current prices ─────────────────────────────────────────
-            tickers = df_tx["Ticker"].unique().tolist()
-            st.info(f"Fetching live prices for: {', '.join(tickers)}…")
-
-            current_prices = {}
-            for tk in tickers:
-                norm = normalise_symbol(tk)
-                q = get_quote(norm)
-                if q.get("price"):
-                    current_prices[norm] = q["price"]
-                    current_prices[tk]   = q["price"]
-
-            # ── XIRR Summary ─────────────────────────────────────────────────
-            st.divider()
-            st.markdown("#### XIRR Results")
-
-            df_xirr = xirr_summary(df_tx, current_prices)
-
-            if df_xirr.empty:
-                st.warning("Could not calculate XIRR. Check your transaction data.")
-            else:
-                all_flows = build_cashflows(df_tx, current_prices).get("__portfolio__", [])
-                portfolio_xirr = xirr(all_flows)
-                portfolio_xirr_pct = f"{portfolio_xirr * 100:.2f}%" if portfolio_xirr else "N/A"
-
-                total_inv  = df_xirr["Invested (₹)"].sum()
-                total_cur  = df_xirr["Current Value (₹)"].sum()
-                total_real = df_xirr["Realised (₹)"].sum()
-                total_div  = df_xirr["Dividends (₹)"].sum()
-
-                m1, m2 = st.columns(2)
-                with m1: st.metric("Total Invested", f"₹{total_inv:,.0f}")
-                with m2: st.metric("Current Value",  f"₹{total_cur:,.0f}")
-
-                m3, m4 = st.columns(2)
-                with m3: st.metric("Realised + Divs", f"₹{total_real + total_div:,.0f}")
-                with m4:
-                    color = "#00C853" if portfolio_xirr and portfolio_xirr > 0 else "#FF1744"
-                    st.markdown(f"""
-                    <div style="background:#1A1F2E;border-radius:10px;padding:14px 16px;
-                                border:1px solid rgba(255,255,255,0.06);text-align:center;">
-                      <div style="font-size:12px;color:#888;text-transform:uppercase;">Portfolio XIRR</div>
-                      <div style="font-size:28px;font-weight:700;color:{color};">{portfolio_xirr_pct}</div>
-                      <div style="font-size:11px;color:#555;">Annualised return</div>
-                    </div>""", unsafe_allow_html=True)
-
-                st.divider()
-                st.markdown("#### Per-Stock XIRR Breakdown")
-
-                def style_xirr(val):
-                    if val is None or (isinstance(val, float) and pd.isna(val)):
-                        return "color: #888"
-                    if val >= 15:
-                        return "color: #00C853; font-weight: bold"
-                    if val >= 0:
-                        return "color: #FFD600; font-weight: bold"
-                    return "color: #FF1744; font-weight: bold"
-
-                display_xirr = df_xirr.copy()
-                display_xirr["Invested (₹)"]      = display_xirr["Invested (₹)"].map(lambda x: f"₹{x:,.0f}")
-                display_xirr["Realised (₹)"]      = display_xirr["Realised (₹)"].map(lambda x: f"₹{x:,.0f}")
-                display_xirr["Dividends (₹)"]     = display_xirr["Dividends (₹)"].map(lambda x: f"₹{x:,.0f}")
-                display_xirr["Current Value (₹)"] = display_xirr["Current Value (₹)"].map(lambda x: f"₹{x:,.0f}")
-
-                st.dataframe(
-                    display_xirr.style.applymap(style_xirr, subset=["XIRR (%)"]),
-                    use_container_width=True, hide_index=True
-                )
-
-                st.markdown("""
-                > **XIRR guide:** 🟢 Above 15% — Strong · 🟡 0–15% — Moderate · 🔴 Negative — Loss
-                >
-                > *XIRR accounts for transaction timing, making it more accurate than simple return %.*
-                """)
-
-                valid = df_xirr.dropna(subset=["XIRR (%)"])
-                if not valid.empty:
-                    colors = ["#00C853" if x >= 0 else "#FF1744" for x in valid["XIRR (%)"]]
-                    fig = go.Figure(go.Bar(
-                        x=valid["Ticker"],
-                        y=valid["XIRR (%)"],
-                        marker_color=colors,
-                        text=[f"{v:+.1f}%" for v in valid["XIRR (%)"]],
-                        textposition="outside",
-                    ))
-                    fig.add_hline(y=0, line_color="#555", line_dash="dash")
-                    fig.update_layout(
-                        template="plotly_dark",
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        plot_bgcolor="rgba(0,0,0,0)",
-                        height=340,
-                        title="XIRR by Stock (%)",
-                        yaxis_ticksuffix="%",
-                        margin=dict(l=40, r=30, t=50, b=40),
-                    )
-                    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-
-            st.caption("⚠️ XIRR is for educational tracking only. Consult a SEBI-registered adviser for investment decisions.")
+    st.caption("⚠️ XIRR is for educational tracking only. Consult a SEBI-registered adviser for investment decisions.")
 
 st.markdown(f'<div class="disclaimer">{DISCLAIMER}</div>', unsafe_allow_html=True)
