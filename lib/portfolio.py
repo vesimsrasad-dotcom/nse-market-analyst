@@ -19,6 +19,7 @@ from lib.claude_analyst import analyse_portfolio
 from lib.refresh import market_status, timestamp_ist
 from lib.auth import check_password, logout_button
 from lib.xirr import xirr_summary, build_cashflows, xirr
+from lib.symbol_resolver import resolve_ticker_column   # ← was missing
 
 st.set_page_config(page_title="Portfolio | NSE Market Analyst",
                    page_icon="💼", layout="wide")
@@ -76,12 +77,12 @@ with st.expander("📂 Upload Transaction File", expanded=True):
     """)
 
     template_df = pd.DataFrame([
-        {"Date":"2023-01-15","Ticker":"RELIANCE",          "Type":"BUY",     "Quantity":10,"Price":2400,"Avg Cost (₹)":2400,"Current Holdings":10,"Notes":"Can use ticker"},
-        {"Date":"2023-06-10","Ticker":"Reliance Industries","Type":"BUY",     "Quantity":5, "Price":2200,"Avg Cost (₹)":2333,"Current Holdings":15,"Notes":"Or company name"},
-        {"Date":"2023-03-01","Ticker":"Tata Consultancy",   "Type":"BUY",     "Quantity":5, "Price":3800,"Avg Cost (₹)":3800,"Current Holdings":5, "Notes":"Name works too"},
-        {"Date":"2023-09-20","Ticker":"HDFCBANK",           "Type":"BUY",     "Quantity":20,"Price":1600,"Avg Cost (₹)":1600,"Current Holdings":20,"Notes":""},
-        {"Date":"2024-01-05","Ticker":"HDFCBANK",           "Type":"SELL",    "Quantity":5, "Price":1750,"Avg Cost (₹)":"",  "Current Holdings":"","Notes":"Partial exit"},
-        {"Date":"2024-02-10","Ticker":"RELIANCE",           "Type":"DIVIDEND","Quantity":"","Price":"",  "Avg Cost (₹)":"",  "Current Holdings":"","Notes":"Div ₹9/share"},
+        {"Date":"2023-01-15","Ticker":"RELIANCE",           "Type":"BUY",     "Quantity":10,"Price":2400,"Avg Cost (₹)":2400,"Current Holdings":10,"Notes":"Can use ticker"},
+        {"Date":"2023-06-10","Ticker":"Reliance Industries", "Type":"BUY",     "Quantity":5, "Price":2200,"Avg Cost (₹)":2333,"Current Holdings":15,"Notes":"Or company name"},
+        {"Date":"2023-03-01","Ticker":"Tata Consultancy",    "Type":"BUY",     "Quantity":5, "Price":3800,"Avg Cost (₹)":3800,"Current Holdings":5, "Notes":"Name works too"},
+        {"Date":"2023-09-20","Ticker":"HDFCBANK",            "Type":"BUY",     "Quantity":20,"Price":1600,"Avg Cost (₹)":1600,"Current Holdings":20,"Notes":""},
+        {"Date":"2024-01-05","Ticker":"HDFCBANK",            "Type":"SELL",    "Quantity":5, "Price":1750,"Avg Cost (₹)":"",  "Current Holdings":"","Notes":"Partial exit"},
+        {"Date":"2024-02-10","Ticker":"RELIANCE",            "Type":"DIVIDEND","Quantity":"","Price":"",  "Avg Cost (₹)":"",  "Current Holdings":"","Notes":"Div ₹9/share"},
     ])
     st.dataframe(template_df, use_container_width=True, hide_index=True)
     st.download_button("⬇️ Download CSV Template",
@@ -149,7 +150,7 @@ if parse_error:
 with st.spinner("Resolving stock names / tickers via Yahoo Finance…"):
     resolved_df = resolve_ticker_column(df_raw["Ticker"])
 
-# Show resolution results so user can verify
+# Show any entries that could not be confirmed
 unresolved = resolved_df[resolved_df["ticker"] == resolved_df["raw"].str.upper()]
 if not unresolved.empty:
     with st.expander(f"⚠️ {len(unresolved)} entries could not be confirmed — verify these"):
@@ -157,11 +158,11 @@ if not unresolved.empty:
         st.caption("These were kept as-is. If wrong, update your file with the exact NSE ticker.")
 
 # Apply resolved tickers back to df
-df_tx = df_raw.copy()
+df_tx      = df_raw.copy()
 ticker_map = dict(zip(resolved_df["raw"], resolved_df["ticker"]))
 name_map   = dict(zip(resolved_df["raw"], resolved_df["name"]))
-df_tx["Ticker"]       = df_tx["Ticker"].map(ticker_map).fillna(df_tx["Ticker"].str.upper())
-df_tx["Resolved Name"]= df_raw["Ticker"].map(name_map)
+df_tx["Ticker"]        = df_tx["Ticker"].map(ticker_map).fillna(df_tx["Ticker"].str.upper())
+df_tx["Resolved Name"] = df_raw["Ticker"].map(name_map)
 
 st.success(f"✅ Loaded {len(df_tx)} transactions · {df_tx['Ticker'].nunique()} stocks")
 with st.expander("📄 View Parsed Transactions"):
@@ -186,15 +187,16 @@ def fetch_quotes(tickers: tuple) -> dict:
 with st.spinner("Fetching live prices from NSE…"):
     quotes = fetch_quotes(all_tickers)
 
-# Override name with Yahoo-resolved name where get_quote returned just the ticker
+# Fill in Yahoo-resolved name where get_quote only returned the ticker
 for tk in all_tickers:
-    raw_entries = [r for r, t in ticker_map.items() if t == tk]
-    if raw_entries and (quotes[tk]["name"] == tk):
-        quotes[tk]["name"] = name_map.get(raw_entries[0], tk)
+    if quotes[tk]["name"] == tk:
+        raw_entries = [r for r, t in ticker_map.items() if t == tk]
+        if raw_entries:
+            quotes[tk]["name"] = name_map.get(raw_entries[0], tk)
 
 current_prices = {tk: v["price"] for tk, v in quotes.items() if v["price"]}
 
-# ── Prep for xirr.py (needs date objects, not datetime) ──────────────────────
+# ── Prep df for xirr.py (needs date objects, not datetime) ───────────────────
 df_for_xirr = df_tx.copy()
 df_for_xirr["Date"] = df_for_xirr["Date"].dt.date
 
